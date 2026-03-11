@@ -44,6 +44,22 @@ struct UploadResponse: Content {
     let ocr_boxes: [OCRBoxItem]
 }
 
+struct OCRPageResult: Content {
+    let page: Int
+    let text: String
+    let page_width: Int
+    let page_height: Int
+    let boxes: [OCRBoxItem]
+}
+
+struct PDFUploadResponse: Content {
+    let success: Bool
+    let message: String
+    let page_count: Int
+    let pages: [OCRPageResult]
+    let full_text: String
+}
+
 actor VaporServer {
     private var app: Application?
     private var runTask: Task<Void, Never>?
@@ -201,6 +217,11 @@ actor VaporServer {
               -X POST http://&lt;YOUR IP&gt;:\(port)/upload \\
               -F "file=@01.png"</code></pre>
                 <hr>
+                <h3>Upload a PDF via <code>upload-pdf</code> API:</h3>
+                <pre><code>curl -H "Accept: application/json" \\
+              -X POST http://&lt;YOUR IP&gt;:\(port)/upload-pdf \\
+              -F "file=@document.pdf"</code></pre>
+                <hr>
                 <h3>OCR Test:</h3>
                 <form action="/upload" method="post" enctype="multipart/form-data">
                     <label>
@@ -312,6 +333,95 @@ actor VaporServer {
                 """
                 return Self.htmlResponse(html)
             }
+        }
+
+        // POST /upload-pdf
+        app.on(.POST, "upload-pdf", body: .collect(maxSize: "500mb")) { [weak self] req async throws -> Response in
+            guard let self else { throw Abort(.internalServerError) }
+
+            struct Upload: Content { var file: File }
+
+            let upload: Upload
+            do {
+                upload = try req.content.decode(Upload.self)
+            } catch {
+                return try Self.jsonResponse(
+                    .badRequest,
+                    PDFUploadResponse(
+                        success: false,
+                        message: "Missing or empty 'file' part",
+                        page_count: 0,
+                        pages: [],
+                        full_text: ""
+                    )
+                )
+            }
+
+            guard upload.file.data.readableBytes > 0 else {
+                return try Self.jsonResponse(
+                    .badRequest,
+                    PDFUploadResponse(
+                        success: false,
+                        message: "Missing or empty 'file' part",
+                        page_count: 0,
+                        pages: [],
+                        full_text: ""
+                    )
+                )
+            }
+
+            let recognitionLevel = await self.recognitionLevel
+            let usesLanguageCorrection = await self.usesLanguageCorrection
+            let automaticallyDetectsLanguage = await self.automaticallyDetectsLanguage
+
+            let data = Self.byteBufferToData(upload.file.data)
+
+            let textRecognizer = TextRecognizer(
+                recognitionLevel: recognitionLevel,
+                usesLanguageCorrection: usesLanguageCorrection,
+                automaticallyDetectsLanguage: automaticallyDetectsLanguage
+            )
+
+            guard let pages = await textRecognizer.getOcrResultForPDF(data: data) else {
+                return try Self.jsonResponse(
+                    .badRequest,
+                    PDFUploadResponse(
+                        success: false,
+                        message: "Invalid or unsupported PDF",
+                        page_count: 0,
+                        pages: [],
+                        full_text: ""
+                    )
+                )
+            }
+
+            let fullText: String
+            if pages.isEmpty {
+                fullText = ""
+            } else if pages.count == 1 {
+                fullText = pages[0].text
+            } else {
+                var parts: [String] = []
+                for (index, pageResult) in pages.enumerated() {
+                    if index == 0 {
+                        parts.append(pageResult.text)
+                    } else {
+                        parts.append("--- Page \(pageResult.page) ---\n\n\(pageResult.text)")
+                    }
+                }
+                fullText = parts.joined(separator: "\n\n")
+            }
+
+            return try Self.jsonResponse(
+                .ok,
+                PDFUploadResponse(
+                    success: true,
+                    message: "PDF processed successfully",
+                    page_count: pages.count,
+                    pages: pages,
+                    full_text: fullText
+                )
+            )
         }
     }
 
