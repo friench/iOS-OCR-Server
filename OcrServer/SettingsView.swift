@@ -16,6 +16,15 @@ struct SettingsView: View {
     @State var httpPort: String = String(Settings.shared.httpPort)
     @State private var showingPortSheet = false
     @State private var inputPortText: String = String(Settings.shared.httpPort)
+
+    // Job Queue
+    @State private var jobQueueEnabled = Settings.shared.jobQueueEnabled
+    @State private var jobQueueHost = Settings.shared.jobQueueHost
+    @State private var jobQueueApiKey = Settings.shared.jobQueueApiKey
+    @State private var showingJobQueueHostSheet = false
+    @State private var showingJobQueueApiKeySheet = false
+    @State private var inputJobQueueHostText = Settings.shared.jobQueueHost
+    @State private var inputJobQueueApiKeyText = Settings.shared.jobQueueApiKey
     
     var body: some View {
         NavigationView {
@@ -43,6 +52,23 @@ struct SettingsView: View {
                             .onTapGesture {
                                 showingPortSheet = true
                             }
+                    }
+
+                    Section(String(localized: "Job Queue")) {
+                        SettingsRow2(icon: "list.bullet.rectangle.portrait",
+                                     title: String(localized: "Enable Job Queue"),
+                                     isOn: $jobQueueEnabled)
+                        if jobQueueEnabled {
+                            SettingsRow(icon: "network",
+                                        title: String(localized: "Host"),
+                                        value: $jobQueueHost)
+                                .onTapGesture { showingJobQueueHostSheet = true }
+                            SettingsRow(icon: "key",
+                                        title: String(localized: "API Key"),
+                                        value: $jobQueueApiKey,
+                                        masked: true)
+                                .onTapGesture { showingJobQueueApiKeySheet = true }
+                        }
                     }
                     
                     Button(action: apply) {
@@ -84,6 +110,9 @@ struct SettingsView: View {
             .onChange(of: autoDetectLanguage) { oldValue, newValue in
                 Settings.shared.automaticallyDetectsLanguage = newValue
             }
+            .onChange(of: jobQueueEnabled) { oldValue, newValue in
+                Settings.shared.jobQueueEnabled = newValue
+            }
             .sheet(isPresented: $showingPortSheet) {
                 VStack {
                     HStack {
@@ -109,6 +138,59 @@ struct SettingsView: View {
                 .padding()
                 .presentationDetents([.height(200)])
             }
+            .sheet(isPresented: $showingJobQueueHostSheet) {
+                VStack {
+                    HStack {
+                        Text(String(localized: "Job Queue Host:"))
+                            .padding(.trailing, 8)
+                        TextField("http://example.com", text: $inputJobQueueHostText)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Spacer()
+                        .frame(height: 40)
+                    HStack {
+                        Button("Cancel") { showingJobQueueHostSheet = false }
+                            .fontWeight(.medium)
+                        Spacer()
+                        Button("Confirm") {
+                            Settings.shared.jobQueueHost = inputJobQueueHostText
+                            jobQueueHost = inputJobQueueHostText
+                            showingJobQueueHostSheet = false
+                        }
+                    }
+                }
+                .padding()
+                .presentationDetents([.height(200)])
+            }
+            .sheet(isPresented: $showingJobQueueApiKeySheet) {
+                VStack {
+                    HStack {
+                        Text(String(localized: "API Key:"))
+                            .padding(.trailing, 8)
+                        TextField(String(localized: "API Key"), text: $inputJobQueueApiKeyText)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Spacer()
+                        .frame(height: 40)
+                    HStack {
+                        Button("Cancel") { showingJobQueueApiKeySheet = false }
+                            .fontWeight(.medium)
+                        Spacer()
+                        Button("Confirm") {
+                            Settings.shared.jobQueueApiKey = inputJobQueueApiKeyText
+                            jobQueueApiKey = inputJobQueueApiKeyText
+                            showingJobQueueApiKeySheet = false
+                        }
+                    }
+                }
+                .padding()
+                .presentationDetents([.height(200)])
+            }
         }
     }
     
@@ -123,6 +205,7 @@ struct SettingsRow: View {
     let icon: String
     let title: String
     @Binding var value: String
+    var masked: Bool = false
     
     var body: some View {
         HStack(spacing: 12) {
@@ -139,7 +222,7 @@ struct SettingsRow: View {
         
             Spacer()
             
-            Text(getValueString(value))
+            Text(displayValue)
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             
@@ -152,6 +235,13 @@ struct SettingsRow: View {
         .contentShape(Rectangle())
     }
     
+    private var displayValue: String {
+        if masked {
+            return value.isEmpty ? String(localized: "Not set") : String(repeating: "•", count: min(value.count, 8))
+        }
+        return getValueString(value)
+    }
+    
     private func getValueString(_ level: String) -> String {
         switch level {
         case "Accurate":
@@ -159,7 +249,7 @@ struct SettingsRow: View {
         case "Fast":
             return String(localized:"Fast")
         default:
-            return level
+            return level.isEmpty ? String(localized: "Not set") : level
         }
     }
 }
