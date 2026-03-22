@@ -10,6 +10,7 @@ import SwiftUI
 @main
 struct OcrServerApp: App {
     @StateObject private var serverManager = VaporServerManager()
+    @Environment(\.scenePhase) private var scenePhase
     
     var body: some Scene {
         WindowGroup {
@@ -18,6 +19,11 @@ struct OcrServerApp: App {
             )
             .onAppear {
                 UIApplication.shared.isIdleTimerDisabled = true
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                serverManager.handleSceneActive()
             }
         }
     }

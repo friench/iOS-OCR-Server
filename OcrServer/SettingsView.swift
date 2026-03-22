@@ -17,14 +17,24 @@ struct SettingsView: View {
     @State private var showingPortSheet = false
     @State private var inputPortText: String = String(Settings.shared.httpPort)
 
-    // Job Queue
-    @State private var jobQueueEnabled = Settings.shared.jobQueueEnabled
-    @State private var jobQueueHost = Settings.shared.jobQueueHost
-    @State private var jobQueueApiKey = Settings.shared.jobQueueApiKey
-    @State private var showingJobQueueHostSheet = false
-    @State private var showingJobQueueApiKeySheet = false
-    @State private var inputJobQueueHostText = Settings.shared.jobQueueHost
-    @State private var inputJobQueueApiKeyText = Settings.shared.jobQueueApiKey
+    // HTTP Server
+    @State private var httpServerEnabled = Settings.shared.httpServerEnabled
+
+    // OCR Worker
+    @State private var workerEnabled = Settings.shared.workerEnabled
+    @State private var workerMode = Settings.shared.workerMode
+    @State private var workerName = Settings.shared.workerName
+    @State private var workerApiHost = Settings.shared.workerApiHost
+    @State private var workerSecret = Settings.shared.workerSecret
+    @State private var workerEndpoint = Settings.shared.workerEndpoint
+    @State private var showingWorkerApiHostSheet = false
+    @State private var showingWorkerSecretSheet = false
+    @State private var showingWorkerNameSheet = false
+    @State private var showingWorkerEndpointSheet = false
+    @State private var inputWorkerApiHostText = Settings.shared.workerApiHost
+    @State private var inputWorkerSecretText = Settings.shared.workerSecret
+    @State private var inputWorkerNameText = Settings.shared.workerName
+    @State private var inputWorkerEndpointText = Settings.shared.workerEndpoint
     
     var body: some View {
         NavigationView {
@@ -48,26 +58,56 @@ struct SettingsView: View {
                                      isOn: $autoDetectLanguage)
                     }
                     Section("Server") {
-                        SettingsRow(icon: "server.rack", title: "HTTP Port", value: $httpPort)
-                            .onTapGesture {
-                                showingPortSheet = true
-                            }
+                        SettingsRow2(icon: "power",
+                                     title: String(localized: "Enable HTTP Server"),
+                                     isOn: $httpServerEnabled)
+                        if httpServerEnabled {
+                            SettingsRow(icon: "server.rack", title: "HTTP Port", value: $httpPort)
+                                .onTapGesture {
+                                    showingPortSheet = true
+                                }
+                        }
                     }
 
-                    Section(String(localized: "Job Queue")) {
-                        SettingsRow2(icon: "list.bullet.rectangle.portrait",
-                                     title: String(localized: "Enable Job Queue"),
-                                     isOn: $jobQueueEnabled)
-                        if jobQueueEnabled {
+                    Section(String(localized: "OCR Worker")) {
+                        SettingsRow2(icon: "arrow.triangle.2.circlepath",
+                                     title: String(localized: "Enable Worker"),
+                                     isOn: $workerEnabled)
+                        if workerEnabled {
+                            Picker(selection: $workerMode) {
+                                Text("SSE").tag("sse")
+                                Text("Push").tag("push")
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "antenna.radiowaves.left.and.right")
+                                        .font(.title2)
+                                        .foregroundColor(.accentColor)
+                                        .frame(width: 28, height: 28)
+                                    Text(String(localized: "Mode"))
+                                        .font(.body)
+                                        .fontWeight(.medium)
+                                }
+                            }
+                            .pickerStyle(.menu)
                             SettingsRow(icon: "network",
-                                        title: String(localized: "Host"),
-                                        value: $jobQueueHost)
-                                .onTapGesture { showingJobQueueHostSheet = true }
+                                        title: String(localized: "API Host"),
+                                        value: $workerApiHost)
+                                .onTapGesture { showingWorkerApiHostSheet = true }
+                            SettingsRow(icon: "person",
+                                        title: String(localized: "Worker Name"),
+                                        value: $workerName)
+                                .onTapGesture { showingWorkerNameSheet = true }
+                            if workerMode == "push" {
+                                SettingsRow(icon: "link",
+                                            title: String(localized: "Endpoint"),
+                                            value: $workerEndpoint)
+                                    .onTapGesture { showingWorkerEndpointSheet = true }
+                            }
                             SettingsRow(icon: "key",
-                                        title: String(localized: "API Key"),
-                                        value: $jobQueueApiKey,
+                                        title: String(localized: "Secret"),
+                                        value: $workerSecret,
                                         masked: true)
-                                .onTapGesture { showingJobQueueApiKeySheet = true }
+                                .onTapGesture { showingWorkerSecretSheet = true }
                         }
                     }
                     
@@ -110,8 +150,14 @@ struct SettingsView: View {
             .onChange(of: autoDetectLanguage) { oldValue, newValue in
                 Settings.shared.automaticallyDetectsLanguage = newValue
             }
-            .onChange(of: jobQueueEnabled) { oldValue, newValue in
-                Settings.shared.jobQueueEnabled = newValue
+            .onChange(of: workerEnabled) { oldValue, newValue in
+                Settings.shared.workerEnabled = newValue
+            }
+            .onChange(of: workerMode) { oldValue, newValue in
+                Settings.shared.workerMode = newValue
+            }
+            .onChange(of: httpServerEnabled) { oldValue, newValue in
+                Settings.shared.httpServerEnabled = newValue
             }
             .sheet(isPresented: $showingPortSheet) {
                 VStack {
@@ -138,12 +184,12 @@ struct SettingsView: View {
                 .padding()
                 .presentationDetents([.height(200)])
             }
-            .sheet(isPresented: $showingJobQueueHostSheet) {
+            .sheet(isPresented: $showingWorkerApiHostSheet) {
                 VStack {
                     HStack {
-                        Text(String(localized: "Job Queue Host:"))
+                        Text(String(localized: "API Host:"))
                             .padding(.trailing, 8)
-                        TextField("http://example.com", text: $inputJobQueueHostText)
+                        TextField("https://api.example.com", text: $inputWorkerApiHostText)
                             .keyboardType(.URL)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
@@ -152,25 +198,25 @@ struct SettingsView: View {
                     Spacer()
                         .frame(height: 40)
                     HStack {
-                        Button("Cancel") { showingJobQueueHostSheet = false }
+                        Button("Cancel") { showingWorkerApiHostSheet = false }
                             .fontWeight(.medium)
                         Spacer()
                         Button("Confirm") {
-                            Settings.shared.jobQueueHost = inputJobQueueHostText
-                            jobQueueHost = inputJobQueueHostText
-                            showingJobQueueHostSheet = false
+                            Settings.shared.workerApiHost = inputWorkerApiHostText
+                            workerApiHost = inputWorkerApiHostText
+                            showingWorkerApiHostSheet = false
                         }
                     }
                 }
                 .padding()
                 .presentationDetents([.height(200)])
             }
-            .sheet(isPresented: $showingJobQueueApiKeySheet) {
+            .sheet(isPresented: $showingWorkerNameSheet) {
                 VStack {
                     HStack {
-                        Text(String(localized: "API Key:"))
+                        Text(String(localized: "Worker Name:"))
                             .padding(.trailing, 8)
-                        TextField(String(localized: "API Key"), text: $inputJobQueueApiKeyText)
+                        TextField("ocr-worker-ios", text: $inputWorkerNameText)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
                             .textFieldStyle(.roundedBorder)
@@ -178,13 +224,69 @@ struct SettingsView: View {
                     Spacer()
                         .frame(height: 40)
                     HStack {
-                        Button("Cancel") { showingJobQueueApiKeySheet = false }
+                        Button("Cancel") { showingWorkerNameSheet = false }
                             .fontWeight(.medium)
                         Spacer()
                         Button("Confirm") {
-                            Settings.shared.jobQueueApiKey = inputJobQueueApiKeyText
-                            jobQueueApiKey = inputJobQueueApiKeyText
-                            showingJobQueueApiKeySheet = false
+                            Settings.shared.workerName = inputWorkerNameText
+                            workerName = inputWorkerNameText
+                            showingWorkerNameSheet = false
+                        }
+                    }
+                }
+                .padding()
+                .presentationDetents([.height(200)])
+            }
+            .sheet(isPresented: $showingWorkerEndpointSheet) {
+                VStack {
+                    HStack {
+                        Text(String(localized: "Endpoint:"))
+                            .padding(.trailing, 8)
+                        TextField("http://192.168.1.x:8000", text: $inputWorkerEndpointText)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Text(String(localized: "Leave empty for auto-detection"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                        .frame(height: 20)
+                    HStack {
+                        Button("Cancel") { showingWorkerEndpointSheet = false }
+                            .fontWeight(.medium)
+                        Spacer()
+                        Button("Confirm") {
+                            Settings.shared.workerEndpoint = inputWorkerEndpointText
+                            workerEndpoint = inputWorkerEndpointText
+                            showingWorkerEndpointSheet = false
+                        }
+                    }
+                }
+                .padding()
+                .presentationDetents([.height(220)])
+            }
+            .sheet(isPresented: $showingWorkerSecretSheet) {
+                VStack {
+                    HStack {
+                        Text(String(localized: "Secret:"))
+                            .padding(.trailing, 8)
+                        TextField(String(localized: "Shared secret"), text: $inputWorkerSecretText)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Spacer()
+                        .frame(height: 40)
+                    HStack {
+                        Button("Cancel") { showingWorkerSecretSheet = false }
+                            .fontWeight(.medium)
+                        Spacer()
+                        Button("Confirm") {
+                            Settings.shared.workerSecret = inputWorkerSecretText
+                            workerSecret = inputWorkerSecretText
+                            showingWorkerSecretSheet = false
                         }
                     }
                 }

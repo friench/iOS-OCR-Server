@@ -9,7 +9,8 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var serverManager: VaporServerManager
-    @ObservedObject private var jobQueueClient: JobQueueClient
+    @ObservedObject private var workerClient: OcrWorkerClient
+    @ObservedObject private var sseClient: OcrWorkerSSEClient
     @State private var isRefreshing = false
     @State private var showingReadme = false
     @State private var showingSettings = false
@@ -18,7 +19,8 @@ struct ContentView: View {
     
     init(serverManager: VaporServerManager) {
         self.serverManager = serverManager
-        self.jobQueueClient = serverManager.jobQueueClient
+        self.workerClient = serverManager.workerClient
+        self.sseClient = serverManager.sseClient
     }
     
     var body: some View {
@@ -73,11 +75,25 @@ struct ContentView: View {
                 .foregroundColor(.white)
                 .padding(10)
             
-            if jobQueueClient.isRunning || Settings.shared.jobQueueEnabled {
-                Text("\(Image(systemName: "list.bullet.rectangle.portrait")) \(jobQueueClient.statusMessage)")
+            if !serverManager.httpServerEnabled {
+                Text("\(Image(systemName: "power")) \(String(localized: "HTTP Server is disabled"))")
                     .font(.subheadline)
-                    .foregroundColor(jobQueueClient.isRunning ? .green : .gray)
+                    .foregroundColor(.orange)
                     .padding(.bottom, 4)
+            }
+
+            if Settings.shared.workerEnabled {
+                if serverManager.workerMode == "sse" {
+                    Text("\(Image(systemName: "antenna.radiowaves.left.and.right")) \(sseClient.statusMessage)")
+                        .font(.subheadline)
+                        .foregroundColor(sseClient.isRunning ? .green : .gray)
+                        .padding(.bottom, 4)
+                } else {
+                    Text("\(Image(systemName: "arrow.triangle.2.circlepath")) \(workerClient.statusMessage)")
+                        .font(.subheadline)
+                        .foregroundColor(workerClient.isRunning ? .green : .gray)
+                        .padding(.bottom, 4)
+                }
             }
             
             Spacer()

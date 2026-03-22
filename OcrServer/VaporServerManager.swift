@@ -12,7 +12,8 @@ import Vision
 @MainActor
 final class VaporServerManager: ObservableObject {
     private let server = VaporServer()
-    private(set) var jobQueueClient = JobQueueClient()
+    private(set) var workerClient = OcrWorkerClient()
+    private(set) var sseClient = OcrWorkerSSEClient()
     private var cancellables = Set<AnyCancellable>()
     
     var port: Int = Settings.shared.httpPort
@@ -20,6 +21,10 @@ final class VaporServerManager: ObservableObject {
     @Published var status: String = ""
     @Published var networkAddresses: [String: String] = [:]
     @Published var isRestarting = false
+    @Published var httpServerEnabled: Bool = Settings.shared.httpServerEnabled
+
+    /// Current worker mode: "sse" or "push"
+    var workerMode: String { Settings.shared.workerMode }
 
     let networkInterfaces = ["en0", "en1", "en2", "en3", "en4", "en5"]
 
@@ -41,28 +46,57 @@ final class VaporServerManager: ObservableObject {
     func startServer() {
         Task {
             isRestarting = true
+            httpServerEnabled = Settings.shared.httpServerEnabled
+            let workerEnabled = Settings.shared.workerEnabled
+            let mode = Settings.shared.workerMode
             await setupParameters()
-            
-            // 開啟 Server 啟動失敗自動重啟
-            await server.setAutoRestart(true)
-            
-            // Server 停止時更新 status 文字
-            await server.setOnStopped { [weak self] in
-                guard let self else { return }
-                Task { @MainActor in
-                    self.status = String(localized:"server stopped")
-                }
-            }
-            
-            do {
-                try await server.start()
-                status = String(localized: "server is running")
+
+            // SSE mode doesn't need Vapor unless HTTP server is enabled
+            let pushWorkerNeedsVapor = workerEnabled && mode == "push"
+            let needsVapor = httpServerEnabled || pushWorkerNeedsVapor
+
+            if !needsVapor && !workerEnabled {
+                status = String(localized: "All services disabled")
                 refreshNetworkAddresses()
-            } catch {
-                status = String(localized: "unable to start the server")
+                isRestarting = false
+                return
             }
 
-            startJobQueueClientIfNeeded()
+            if needsVapor {
+                await server.setAutoRestart(true)
+                
+                await server.setOnStopped { [weak self] in
+                    guard let self else { return }
+                    Task { @MainActor in
+                        self.status = String(localized:"server stopped")
+                    }
+                }
+                
+                do {
+                    try await server.start()
+
+                    // Register worker route only in push mode
+                    if workerEnabled && mode == "push" {
+                        if let app = await server.application() {
+                            registerWorkerRoute(on: app, workerClient: workerClient)
+                        }
+                    }
+
+                    if httpServerEnabled {
+                        status = String(localized: "server is running")
+                    } else {
+                        status = String(localized: "worker mode active")
+                    }
+                    refreshNetworkAddresses()
+                } catch {
+                    status = String(localized: "unable to start the server")
+                }
+            } else {
+                // SSE-only mode, no Vapor needed
+                refreshNetworkAddresses()
+            }
+
+            await startWorkerIfNeeded()
             isRestarting = false
         }
     }
@@ -70,33 +104,33 @@ final class VaporServerManager: ObservableObject {
     func stopServer() {
         Task {
             isRestarting = true
+            await workerClient.stop()
+            await sseClient.stop()
             await server.stop()
-            jobQueueClient.stop()
             status = String(localized: "server stopped")
             isRestarting = false
         }
     }
 
     func restartServer() {
-        self.status = String(localized: "server restarting...")
+        status = String(localized: "server restarting...")
+        isRestarting = true
         Task {
-            isRestarting = true
-            jobQueueClient.stop()
+            await workerClient.stop()
+            await sseClient.stop()
+            await server.stop()
             try? await Task.sleep(nanoseconds: 1_000_000_000)
-            await setupParameters()
-            do {
-                try await server.restart()
-                status = String(localized: "server is running")
-                refreshNetworkAddresses()
-            } catch {
-                status = String(localized: "unable to start the server")
-            }
-            startJobQueueClientIfNeeded()
-            isRestarting = false
+            startServer()
         }
     }
 
-    // 從 Settings 套用參數
+    /// Call when app returns to foreground to reconnect SSE.
+    func handleSceneActive() {
+        if Settings.shared.workerEnabled && Settings.shared.workerMode == "sse" {
+            sseClient.reconnect()
+        }
+    }
+
     private func setupParameters() async {
         port = Settings.shared.httpPort
         
@@ -108,21 +142,55 @@ final class VaporServerManager: ObservableObject {
             recognitionLevel: level,
             usesLanguageCorrection: Settings.shared.languageCorrection,
             automaticallyDetectsLanguage: Settings.shared.automaticallyDetectsLanguage,
+            ocrRoutesEnabled: Settings.shared.httpServerEnabled
         )
     }
 
-    private func startJobQueueClientIfNeeded() {
-        guard Settings.shared.jobQueueEnabled else { return }
+    private func startWorkerIfNeeded() async {
+        guard Settings.shared.workerEnabled else { return }
         let level: RecognizeTextRequest.RecognitionLevel =
             (Settings.shared.recognitionLevel == "Fast") ? .fast : .accurate
-        jobQueueClient.configure(
-            host: Settings.shared.jobQueueHost,
-            apiKey: Settings.shared.jobQueueApiKey,
-            recognitionLevel: level,
-            usesLanguageCorrection: Settings.shared.languageCorrection,
-            automaticallyDetectsLanguage: Settings.shared.automaticallyDetectsLanguage
-        )
-        jobQueueClient.start()
+
+        let mode = Settings.shared.workerMode
+
+        if mode == "sse" {
+            sseClient.configure(
+                apiHost: Settings.shared.workerApiHost,
+                secret: Settings.shared.workerSecret,
+                workerName: Settings.shared.workerName,
+                recognitionLevel: level,
+                usesLanguageCorrection: Settings.shared.languageCorrection,
+                automaticallyDetectsLanguage: Settings.shared.automaticallyDetectsLanguage
+            )
+            await sseClient.start()
+        } else {
+            // Push mode — needs endpoint
+            var endpoint = Settings.shared.workerEndpoint
+            if endpoint.isEmpty {
+                endpoint = resolveWorkerEndpoint()
+                Settings.shared.workerEndpoint = endpoint
+            }
+
+            workerClient.configure(
+                apiHost: Settings.shared.workerApiHost,
+                secret: Settings.shared.workerSecret,
+                workerName: Settings.shared.workerName,
+                workerEndpoint: endpoint,
+                recognitionLevel: level,
+                usesLanguageCorrection: Settings.shared.languageCorrection,
+                automaticallyDetectsLanguage: Settings.shared.automaticallyDetectsLanguage
+            )
+            await workerClient.start()
+        }
+    }
+
+    /// Builds the worker endpoint URL from the first available network address.
+    private func resolveWorkerEndpoint() -> String {
+        refreshNetworkAddresses()
+        if let firstIP = networkAddresses.values.first {
+            return "http://\(firstIP):\(port)"
+        }
+        return ""
     }
 
     func refreshNetworkAddresses() {
@@ -132,7 +200,6 @@ final class VaporServerManager: ObservableObject {
                 networkAddresses[interface] = ip
             }
         }
-        //print("\(networkAddresses)")
     }
 
     private func getIP(for interface: String) -> String? {
