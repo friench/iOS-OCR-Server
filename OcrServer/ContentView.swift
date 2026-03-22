@@ -9,11 +9,17 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var serverManager: VaporServerManager
+    @ObservedObject private var jobQueueClient: JobQueueClient
     @State private var isRefreshing = false
     @State private var showingReadme = false
     @State private var showingSettings = false
     @State private var showingMonitor = false
     @State private var showingDonation = false
+    
+    init(serverManager: VaporServerManager) {
+        self.serverManager = serverManager
+        self.jobQueueClient = serverManager.jobQueueClient
+    }
     
     var body: some View {
         VStack {
@@ -66,6 +72,13 @@ struct ContentView: View {
                 .font(.headline)
                 .foregroundColor(.white)
                 .padding(10)
+            
+            if jobQueueClient.isRunning || Settings.shared.jobQueueEnabled {
+                Text("\(Image(systemName: "list.bullet.rectangle.portrait")) \(jobQueueClient.statusMessage)")
+                    .font(.subheadline)
+                    .foregroundColor(jobQueueClient.isRunning ? .green : .gray)
+                    .padding(.bottom, 4)
+            }
             
             Spacer()
                 .frame(height: 100)

@@ -12,6 +12,7 @@ import Vision
 @MainActor
 final class VaporServerManager: ObservableObject {
     private let server = VaporServer()
+    private(set) var jobQueueClient = JobQueueClient()
     private var cancellables = Set<AnyCancellable>()
     
     var port: Int = Settings.shared.httpPort
@@ -60,6 +61,8 @@ final class VaporServerManager: ObservableObject {
             } catch {
                 status = String(localized: "unable to start the server")
             }
+
+            startJobQueueClientIfNeeded()
             isRestarting = false
         }
     }
@@ -68,6 +71,7 @@ final class VaporServerManager: ObservableObject {
         Task {
             isRestarting = true
             await server.stop()
+            jobQueueClient.stop()
             status = String(localized: "server stopped")
             isRestarting = false
         }
@@ -77,6 +81,7 @@ final class VaporServerManager: ObservableObject {
         self.status = String(localized: "server restarting...")
         Task {
             isRestarting = true
+            jobQueueClient.stop()
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await setupParameters()
             do {
@@ -86,6 +91,7 @@ final class VaporServerManager: ObservableObject {
             } catch {
                 status = String(localized: "unable to start the server")
             }
+            startJobQueueClientIfNeeded()
             isRestarting = false
         }
     }
@@ -103,6 +109,20 @@ final class VaporServerManager: ObservableObject {
             usesLanguageCorrection: Settings.shared.languageCorrection,
             automaticallyDetectsLanguage: Settings.shared.automaticallyDetectsLanguage,
         )
+    }
+
+    private func startJobQueueClientIfNeeded() {
+        guard Settings.shared.jobQueueEnabled else { return }
+        let level: RecognizeTextRequest.RecognitionLevel =
+            (Settings.shared.recognitionLevel == "Fast") ? .fast : .accurate
+        jobQueueClient.configure(
+            host: Settings.shared.jobQueueHost,
+            apiKey: Settings.shared.jobQueueApiKey,
+            recognitionLevel: level,
+            usesLanguageCorrection: Settings.shared.languageCorrection,
+            automaticallyDetectsLanguage: Settings.shared.automaticallyDetectsLanguage
+        )
+        jobQueueClient.start()
     }
 
     func refreshNetworkAddresses() {

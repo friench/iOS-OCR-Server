@@ -50,4 +50,33 @@ class Settings {
             UserDefaults.standard.set(newValue, forKey: "automaticallyDetectsLanguage")
         }
     }
+
+    // MARK: - Job Queue
+
+    var jobQueueEnabled: Bool {
+        get {
+            return UserDefaults.standard.object(forKey: "jobQueueEnabled") as? Bool ?? false
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "jobQueueEnabled")
+        }
+    }
+
+    var jobQueueHost: String {
+        get {
+            return UserDefaults.standard.string(forKey: "jobQueueHost") ?? ""
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "jobQueueHost")
+        }
+    }
+
+    var jobQueueApiKey: String {
+        get {
+            return UserDefaults.standard.string(forKey: "jobQueueApiKey") ?? ""
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "jobQueueApiKey")
+        }
+    }
 }
