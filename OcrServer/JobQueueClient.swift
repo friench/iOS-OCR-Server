@@ -61,6 +61,8 @@ final class JobQueueClient: ObservableObject {
     private let idlePollInterval: TimeInterval = 3
     // Seconds between polls when a job was just processed (backpressure)
     private let activePollInterval: TimeInterval = 0.5
+    // Seconds to wait after a connection error before retrying
+    private let errorRetryInterval: TimeInterval = 10
 
     // MARK: - Public API
 
@@ -85,9 +87,13 @@ final class JobQueueClient: ObservableObject {
             return
         }
         isRunning = true
-        statusMessage = String(localized: "Connected to job queue")
+        statusMessage = String(localized: "Connecting to job queue…")
         pollTask = Task { [weak self] in
             await self?.pollLoop()
+            // If the task finishes unexpectedly (self deallocated), reset state
+            await MainActor.run { [weak self] in
+                self?.isRunning = false
+            }
         }
     }
 
@@ -103,37 +109,58 @@ final class JobQueueClient: ObservableObject {
 
     private func pollLoop() async {
         while !Task.isCancelled {
-            let didProcess = await fetchAndProcessJob()
-            let delay = didProcess ? activePollInterval : idlePollInterval
+            let result = await fetchAndProcessJob()
+            let delay: TimeInterval
+            switch result {
+            case .processed:
+                delay = activePollInterval
+            case .empty:
+                delay = idlePollInterval
+            case .connectionError(let message):
+                statusMessage = message
+                delay = errorRetryInterval
+            }
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
     }
 
+    private enum PollResult {
+        case processed
+        case empty
+        case connectionError(String)
+    }
+
     /// Fetches one job, performs OCR, posts the result.
-    /// Returns `true` when a job was processed.
-    private func fetchAndProcessJob() async -> Bool {
-        guard let job = await fetchNextJob() else { return false }
+    private func fetchAndProcessJob() async -> PollResult {
+        let fetchResult = await fetchNextJob()
+        switch fetchResult {
+        case .noJob:
+            statusMessage = String(localized: "Waiting for jobs…")
+            return .empty
+        case .error(let message):
+            return .connectionError(message)
+        case .job(let job):
+            guard let imageData = await loadImageData(from: job) else {
+                await postResult(jobId: job.id, success: false, ocrResult: nil)
+                return .processed
+            }
 
-        guard let imageData = await loadImageData(from: job) else {
-            await postResult(jobId: job.id, success: false, ocrResult: nil)
-            return true
+            let recognizer = TextRecognizer(
+                recognitionLevel: recognitionLevel,
+                usesLanguageCorrection: usesLanguageCorrection,
+                automaticallyDetectsLanguage: automaticallyDetectsLanguage
+            )
+
+            let result = await recognizer.getOcrResult(data: imageData)
+            await postResult(jobId: job.id, success: result != nil, ocrResult: result)
+
+            await MainActor.run {
+                processedCount += 1
+                statusMessage = String(format: NSLocalizedString("Jobs processed: %d", comment: "Job queue processed count"), processedCount)
+            }
+
+            return .processed
         }
-
-        let recognizer = TextRecognizer(
-            recognitionLevel: recognitionLevel,
-            usesLanguageCorrection: usesLanguageCorrection,
-            automaticallyDetectsLanguage: automaticallyDetectsLanguage
-        )
-
-        let result = await recognizer.getOcrResult(data: imageData)
-        await postResult(jobId: job.id, success: result != nil, ocrResult: result)
-
-        await MainActor.run {
-            processedCount += 1
-            statusMessage = String(format: NSLocalizedString("Jobs processed: %d", comment: "Job queue processed count"), processedCount)
-        }
-
-        return true
     }
 
     // MARK: - Networking helpers
@@ -153,6 +180,12 @@ final class JobQueueClient: ObservableObject {
         let ocr_boxes: [OCRBoxItem]
     }
 
+    private enum FetchResult {
+        case job(JobPayload)
+        case noJob          // 204 or empty queue
+        case error(String)  // network / auth / server error
+    }
+
     private func makeBaseURL() -> URL? {
         var urlString = host.trimmingCharacters(in: .whitespacesAndNewlines)
         if !urlString.hasPrefix("http://") && !urlString.hasPrefix("https://") {
@@ -167,8 +200,10 @@ final class JobQueueClient: ObservableObject {
         }
     }
 
-    private func fetchNextJob() async -> JobPayload? {
-        guard let base = makeBaseURL() else { return nil }
+    private func fetchNextJob() async -> FetchResult {
+        guard let base = makeBaseURL() else {
+            return .error(String(localized: "Invalid host URL"))
+        }
         let url = base.appendingPathComponent("job")
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.httpMethod = "GET"
@@ -176,11 +211,28 @@ final class JobQueueClient: ObservableObject {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else { return nil }
-            guard httpResponse.statusCode == 200 else { return nil }
-            return try JSONDecoder().decode(JobPayload.self, from: data)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return .error(String(localized: "Invalid server response"))
+            }
+            switch httpResponse.statusCode {
+            case 200:
+                do {
+                    let job = try JSONDecoder().decode(JobPayload.self, from: data)
+                    return .job(job)
+                } catch {
+                    return .error(String(localized: "Failed to parse job"))
+                }
+            case 204:
+                return .noJob
+            case 401, 403:
+                return .error(String(localized: "Authentication failed — check API key"))
+            case 500...599:
+                return .error(String(format: NSLocalizedString("Server error (%d)", comment: "Job queue server error with status code"), httpResponse.statusCode))
+            default:
+                return .noJob
+            }
         } catch {
-            return nil
+            return .error(String(format: NSLocalizedString("Connection error: %@", comment: "Job queue connection error"), error.localizedDescription))
         }
     }
 
